@@ -6,18 +6,16 @@ from pymongo import MongoClient
 
 # ============================================================
 # KONEKSI MONGODB
-# ============================================================
 @st.cache_resource
 def koneksi_mongodb():
     client = MongoClient(
-        "mongodb://localhost:27017/",
-        serverSelectionTimeoutMS=5000
+        st.secrets["MONGODB_URI"],
+        serverSelectionTimeoutMS=10000
     )
     client.admin.command("ping")
 
     db = client["dashboard_thermal"]
     return db["konten_dashboard"]
-
 
 # ============================================================
 # MENGAMBIL KONTEN DARI MONGODB

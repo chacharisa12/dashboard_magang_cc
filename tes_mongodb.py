@@ -1,29 +1,28 @@
 
 from pymongo import MongoClient
+from pymongo.server_api import ServerApi
+
+uri = "mongodb+srv://charisamarthadps18_db_user:<db_password>@cluster0.xnaoznz.mongodb.net/"
+
+client = MongoClient(
+    uri,
+    server_api=ServerApi("1"),
+    serverSelectionTimeoutMS=10000
+)
 
 try:
-    client = MongoClient(
-        "mongodb://localhost:27017/",
-        serverSelectionTimeoutMS=5000
-    )
-
-    # Cek apakah MongoDB aktif
     client.admin.command("ping")
-    print("Koneksi MongoDB berhasil!")
+    print("Berhasil terhubung ke MongoDB Atlas!")
 
-    # Akses database dan collection milikmu
     db = client["dashboard_thermal"]
     collection = db["konten_dashboard"]
 
-    # Cek jumlah dokumen
-    jumlah = collection.count_documents({})
-    print("Jumlah dokumen:", jumlah)
-
-    # Tampilkan judul setiap dokumen
-    for dokumen in collection.find({}, {"judul": 1}):
-        print("-", dokumen.get("judul", "Tanpa judul"))
-
-    client.close()
+    print("Database:", db.name)
+    print("Collection:", collection.name)
+    print("Jumlah dokumen:", collection.count_documents({}))
 
 except Exception as e:
     print("Koneksi gagal:", e)
+
+finally:
+    client.close()
