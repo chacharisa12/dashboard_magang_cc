@@ -65,138 +65,207 @@ def tampilkan_konten(id_konten):
 
 
 # ============================================================
-# LOGIKA JAWABAN CHATBOT
-
+# PENCARIAN KONTEN CHATBOT OTOMATIS DARI MONGODB
 # ============================================================
-# LOGIKA JAWABAN CHATBOT
-# ============================================================
-def jawab_chatbot(pertanyaan):
-    teks = pertanyaan.lower().strip()
-    teks = teks.strip("!?., ")
+import re
+import unicodedata
 
-    # 1. Sapaan awal
-    sapaan = [
-        "hai", "halo", "hi", "hello", "helo",
-        "p", "assalamualaikum", "selamat pagi",
-        "selamat siang", "selamat sore", "selamat malam"
-    ]
 
-    if teks in sapaan:
-        id_konten = "sapaan_awal"
+def normalisasi_teks(teks):
+    """Ubah teks menjadi bentuk sederhana untuk pencarian."""
+    teks = str(teks).lower()
+    teks = unicodedata.normalize("NFKD", teks)
+    teks = "".join(k for k in teks if not unicodedata.combining(k))
+    return re.findall(r"[a-z0-9]+", teks)
 
-    # 2. Perbedaan WBGT dan Heat Index
-    elif any(k in teks for k in [
-        "perbedaan", "beda", "bandingkan", "dibandingkan"
-    ]):
-        id_konten = "perbedaan"
 
-    # 3. Hasil analisis
-    elif any(k in teks for k in [
-        "hasil analisis", "hasil penelitian",
-        "pembahasan", "hasil pengamatan", "temuan"
-    ]):
-        id_konten = "hasil_analisis"
+def kumpulkan_teks(nilai):
+    """Ambil seluruh teks dari field dokumen, termasuk field bertingkat."""
+    hasil = []
 
-    # 4. Heat Index
-    elif any(k in teks for k in [
-        "heat index", "heat-index", "indeks panas"
-    ]):
-        id_konten = "heat_index"
+    if isinstance(nilai, dict):
+        for kunci, isi in nilai.items():
+            if kunci != "_id":
+                hasil.extend(kumpulkan_teks(isi))
+    elif isinstance(nilai, (list, tuple)):
+        for item in nilai:
+            hasil.extend(kumpulkan_teks(item))
+    elif isinstance(nilai, str):
+        hasil.append(nilai)
 
-    # 5. WBGT
-    elif any(k in teks for k in [
-        "wbgt", "tekanan panas", "heat stress"
-    ]):
-        id_konten = "wbgt"
+    return hasil
 
-    else:
-        return (
-            "Maaf, aku belum menemukan topik yang sesuai. 😊\n\n"
-            "Kamu bisa bertanya tentang WBGT, Heat Index, "
-            "perbedaan keduanya, atau hasil analisis."
-        )
 
-    # Ambil dokumen dari MongoDB
-    data = ambil_konten(id_konten)
+def skor_dokumen(pertanyaan, dokumen):
+    """Hitung kecocokan pertanyaan dengan semua teks dalam satu dokumen."""
+    kata_tanya = normalisasi_teks(pertanyaan)
+    kata_dokumen = normalisasi_teks(" ".join(kumpulkan_teks(dokumen)))
 
-    if data is None:
-        return (
-            f"Maaf, dokumen '{id_konten}' belum ditemukan "
-            "di MongoDB."
-        )
+    # Kata umum tidak membantu menentukan topik.
+    kata_umum = {
+        "apa", "itu", "ini", "dan", "atau", "yang", "di", "ke", "dari",
+        "untuk", "dengan", "bagaimana", "mengapa", "jelaskan", "tolong",
+        "dong", "ya", "saya", "aku", "tentang", "mengenai", "adalah",
+        "the", "is", "are", "of", "to", "please"
+    }
+    kata_tanya = [k for k in kata_tanya if k not in kata_umum]
 
-    # Susun jawaban
-    jawaban = f"**{data['judul']}**\n\n{data['isi']}"
+    if not kata_tanya:
+        return 0
 
-    if "poin" in data:
-        jawaban += "\n\n" + "\n".join(
-            f"- {poin}" for poin in data["poin"]
-        )
+    set_dokumen = set(kata_dokumen)
+    cocok = set(kata_tanya) & set_dokumen
+    skor = len(cocok) / len(set(kata_tanya))
 
-    if "perbandingan" in data:
+    # Tambahan skor jika frasa pertanyaan muncul persis di dokumen.
+    pertanyaan_normal = " ".join(normalisasi_teks(pertanyaan))
+    teks_dokumen_normal = " ".join(kata_dokumen)
+    if len(pertanyaan_normal) >= 3 and pertanyaan_normal in teks_dokumen_normal:
+        skor += 1
+
+    # Utamakan kecocokan pada judul.
+    judul = " ".join(normalisasi_teks(dokumen.get("judul", "")))
+    kata_judul = set(judul.split())
+    if cocok & kata_judul:
+        skor += 0.35
+
+    return skor
+
+
+def format_nilai(nilai):
+    """Format isi dokumen MongoDB menjadi teks yang bisa dibaca chatbot."""
+    if isinstance(nilai, dict):
+        bagian = []
+        for kunci, isi in nilai.items():
+            if kunci == "_id":
+                continue
+            label = kunci.replace("_", " ").strip().capitalize()
+            teks_isi = format_nilai(isi)
+            if teks_isi:
+                bagian.append(f"**{label}:**\n{teks_isi}")
+        return "\n\n".join(bagian)
+
+    if isinstance(nilai, list):
+        bagian = []
+        for item in nilai:
+            if isinstance(item, dict):
+                teks_item = format_nilai(item)
+                if teks_item:
+                    bagian.append(teks_item)
+            else:
+                teks_item = format_nilai(item)
+                if teks_item:
+                    bagian.append(f"- {teks_item}")
+        return "\n".join(bagian)
+
+    if nilai is None:
+        return ""
+
+    return str(nilai)
+
+
+def format_dokumen_chatbot(data):
+    """Susun semua field dokumen agar tidak perlu menulis ID satu per satu."""
+    judul = data.get("judul", "Informasi")
+    isi = data.get("isi", "")
+    bagian = [f"**{judul}**"]
+
+    if isi:
+        bagian.append(str(isi))
+
+    # Field umum ditampilkan dengan format yang lebih rapi.
+    if data.get("poin"):
+        bagian.append("\n".join(f"- {poin}" for poin in data["poin"]))
+
+    if data.get("perbandingan"):
         for item in data["perbandingan"]:
-            jawaban += (
-                f"\n\n**{item['aspek']}**\n"
-                f"- WBGT: {item['wbgt']}\n"
-                f"- Heat Index: {item['heat_index']}"
-            )
+            if isinstance(item, dict):
+                aspek = item.get("aspek", "Perbandingan")
+                wbgt = item.get("wbgt", "-")
+                heat_index = item.get("heat_index", "-")
+                bagian.append(
+                    f"**{aspek}**\n"
+                    f"- WBGT: {wbgt}\n"
+                    f"- Heat Index: {heat_index}"
+                )
+            else:
+                bagian.append(format_nilai(item))
 
-    if "pembahasan" in data:
-        for bagian in data["pembahasan"]:
-            jawaban += (
-                f"\n\n**{bagian['judul']}**\n"
-                f"{bagian['isi']}"
-            )
+    if data.get("pembahasan"):
+        for item in data["pembahasan"]:
+            if isinstance(item, dict):
+                subjudul = item.get("judul", "Pembahasan")
+                isi_bagian = item.get("isi", "")
+                bagian.append(f"**{subjudul}**\n{isi_bagian}".strip())
+            else:
+                bagian.append(format_nilai(item))
 
-    return jawaban
+    # Field tambahan apa pun dari MongoDB tetap ikut ditampilkan.
+    field_khusus = {"_id", "judul", "isi", "poin", "perbandingan", "pembahasan"}
+    for kunci, nilai in data.items():
+        if kunci not in field_khusus and nilai not in (None, "", [], {}):
+            label = kunci.replace("_", " ").strip().capitalize()
+            bagian.append(f"**{label}**\n{format_nilai(nilai)}")
 
-# ============================================================
-# TAMPILAN CHATBOT
+    return "\n\n".join(teks for teks in bagian if teks)
+
+
+def jawab_chatbot(pertanyaan):
+    """Cari dokumen paling relevan dari seluruh koleksi, tanpa daftar ID manual."""
+    collection = koneksi_mongodb()
+    dokumen = list(collection.find({}))
+
+    if not dokumen:
+        return "Belum ada dokumen konten di MongoDB."
+
+    peringkat = [
+        (skor_dokumen(pertanyaan, data), data)
+        for data in dokumen
+    ]
+    peringkat.sort(key=lambda item: item[0], reverse=True)
+
+    skor_terbaik, data_terbaik = peringkat[0]
+
+    if skor_terbaik < 0.25:
+        return (
+            "Maaf, aku belum menemukan informasi yang cukup sesuai dengan "
+            "pertanyaanmu di MongoDB. Coba gunakan kata kunci yang lebih "
+            "spesifik, misalnya WBGT, Heat Index, ENSO, atau hasil analisis."
+        )
+
+    return format_dokumen_chatbot(data_terbaik)
+
 
 # ============================================================
 # TAMPILAN CHATBOT
 # ============================================================
 def render_chatbot():
     st.title("Chatbot")
-
     st.write(
-        "Tanyakan sesuatu tentang WBGT, Heat Index, "
+        "Tanyakan sesuatu tentang WBGT, Heat Index, ENSO, "
         "perbedaan keduanya, atau hasil analisis."
     )
 
-    # Sapaan awal diambil dari MongoDB
     if "riwayat_chat" not in st.session_state:
         try:
-            data_sapaan = ambil_konten("sapaan_awal")
-
-            if data_sapaan:
-                pesan_awal = data_sapaan["isi"]
-            else:
-                pesan_awal = (
-                    "Hai! 👋 Ada yang ingin kamu tanyakan?"
-                )
-
-        except Exception:
+            data_sapaan = koneksi_mongodb().find_one({"_id": "sapaan_awal"})
             pesan_awal = (
-                "Hai! 👋 Ada yang ingin kamu tanyakan?"
+                format_dokumen_chatbot(data_sapaan)
+                if data_sapaan
+                else "Hai! 👋 Ada yang ingin kamu tanyakan?"
             )
+        except Exception:
+            pesan_awal = "Hai! 👋 Ada yang ingin kamu tanyakan?"
 
         st.session_state.riwayat_chat = [
-            {
-                "role": "assistant",
-                "content": pesan_awal
-            }
+            {"role": "assistant", "content": pesan_awal}
         ]
 
-    # Tampilkan riwayat percakapan
     for pesan in st.session_state.riwayat_chat:
         with st.chat_message(pesan["role"]):
             st.markdown(pesan["content"])
 
-    # Input pengguna
-    pertanyaan = st.chat_input(
-        "Ketik pertanyaanmu di sini..."
-    )
+    pertanyaan = st.chat_input("Ketik pertanyaanmu di sini...")
 
     if pertanyaan:
         st.session_state.riwayat_chat.append({
@@ -211,8 +280,8 @@ def render_chatbot():
             jawaban = jawab_chatbot(pertanyaan)
         except Exception as e:
             jawaban = (
-                "Maaf, terjadi kendala saat mengambil data "
-                f"dari MongoDB: {e}"
+                "Maaf, terjadi kendala saat mengambil data dari MongoDB. "
+                f"Detail: {e}"
             )
 
         st.session_state.riwayat_chat.append({
@@ -222,6 +291,7 @@ def render_chatbot():
 
         with st.chat_message("assistant"):
             st.markdown(jawaban)
+
 
 # ---------------------------------------------------------------
 # DATA (hasil agregasi dari analisis)
@@ -591,119 +661,6 @@ def render_dashboard():
 
 
 
-
-# ============================================================
-# LOGIKA JAWABAN CHATBOT
-# ============================================================
-def jawab_chatbot(pertanyaan):
-    teks = pertanyaan.lower().strip()
-
-    if any(k in teks for k in [
-        "perbedaan", "beda", "bandingkan", "dibandingkan"
-    ]):
-        id_konten = "perbedaan"
-
-    elif any(k in teks for k in [
-        "hasil analisis", "hasil penelitian",
-        "pembahasan", "hasil pengamatan", "temuan"
-    ]):
-        id_konten = "hasil_analisis"
-
-    elif any(k in teks for k in [
-        "heat index", "heat-index", "indeks panas"
-    ]):
-        id_konten = "heat_index"
-
-    elif any(k in teks for k in [
-        "wbgt", "tekanan panas", "heat stress"
-    ]):
-        id_konten = "wbgt"
-
-    else:
-        return (
-            "Maaf, aku belum menemukan topik yang sesuai. "
-            "Coba tanyakan tentang WBGT, Heat Index, "
-            "perbedaan keduanya, atau hasil analisis."
-        )
-
-    data = ambil_konten(id_konten)
-
-    if data is None:
-        return "Maaf, informasi tersebut belum tersedia di MongoDB."
-
-    jawaban = f"**{data['judul']}**\n\n{data['isi']}"
-
-    if "poin" in data:
-        jawaban += "\n\n" + "\n".join(
-            f"- {poin}" for poin in data["poin"]
-        )
-
-    if "perbandingan" in data:
-        for item in data["perbandingan"]:
-            jawaban += (
-                f"\n\n**{item['aspek']}**\n"
-                f"- WBGT: {item['wbgt']}\n"
-                f"- Heat Index: {item['heat_index']}"
-            )
-
-    if "pembahasan" in data:
-        for bagian in data["pembahasan"]:
-            jawaban += (
-                f"\n\n**{bagian['judul']}**\n"
-                f"{bagian['isi']}"
-            )
-
-    return jawaban
-
-
-# ============================================================
-# TAMPILAN CHATBOT
-# ============================================================
-def render_chatbot():
-    st.title("Chatbot")
-    st.write(
-        "Tanyakan sesuatu tentang WBGT, Heat Index, "
-        "perbedaan keduanya, atau hasil analisis."
-    )
-
-    if "riwayat_chat" not in st.session_state:
-        st.session_state.riwayat_chat = [
-            {
-                "role": "assistant",
-                "content": (
-                    "Halo! 👋 Ada yang ingin kamu tanyakan? "
-                    "Silakan ketik pertanyaanmu di bawah."
-                )
-            }
-        ]
-
-    for pesan in st.session_state.riwayat_chat:
-        with st.chat_message(pesan["role"]):
-            st.markdown(pesan["content"])
-
-    pertanyaan = st.chat_input("Ketik pertanyaanmu di sini...")
-
-    if pertanyaan:
-        st.session_state.riwayat_chat.append({
-            "role": "user",
-            "content": pertanyaan
-        })
-
-        with st.chat_message("user"):
-            st.markdown(pertanyaan)
-
-        try:
-            jawaban = jawab_chatbot(pertanyaan)
-        except Exception as e:
-            jawaban = f"Terjadi kendala saat mengambil data: {e}"
-
-        st.session_state.riwayat_chat.append({
-            "role": "assistant",
-            "content": jawaban
-        })
-
-        with st.chat_message("assistant"):
-            st.markdown(jawaban)
 
 # ============================================================
 # APLIKASI UTAMA
