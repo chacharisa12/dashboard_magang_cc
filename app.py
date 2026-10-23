@@ -3,11 +3,6 @@ import pandas as pd
 import streamlit as st
 from pymongo import MongoClient
 
-import altair as alt
-import pandas as pd
-import streamlit as st
-from pymongo import MongoClient
-
 
 # ============================================================
 # KONEKSI MONGODB
@@ -71,50 +66,70 @@ def tampilkan_konten(id_konten):
 
 # ============================================================
 # LOGIKA JAWABAN CHATBOT
+
+# ============================================================
+# LOGIKA JAWABAN CHATBOT
 # ============================================================
 def jawab_chatbot(pertanyaan):
     teks = pertanyaan.lower().strip()
+    teks = teks.strip("!?., ")
 
-    # Kata kunci untuk menentukan konten
-    if any(kata in teks for kata in [
+    # 1. Sapaan awal
+    sapaan = [
+        "hai", "halo", "hi", "hello", "helo",
+        "p", "assalamualaikum", "selamat pagi",
+        "selamat siang", "selamat sore", "selamat malam"
+    ]
+
+    if teks in sapaan:
+        id_konten = "sapaan_awal"
+
+    # 2. Perbedaan WBGT dan Heat Index
+    elif any(k in teks for k in [
         "perbedaan", "beda", "bandingkan", "dibandingkan"
     ]):
         id_konten = "perbedaan"
 
-    elif any(kata in teks for kata in [
-        "hasil analisis", "hasil penelitian", "pembahasan",
-        "hasil pengamatan", "temuan"
+    # 3. Hasil analisis
+    elif any(k in teks for k in [
+        "hasil analisis", "hasil penelitian",
+        "pembahasan", "hasil pengamatan", "temuan"
     ]):
         id_konten = "hasil_analisis"
 
-    elif any(kata in teks for kata in [
+    # 4. Heat Index
+    elif any(k in teks for k in [
         "heat index", "heat-index", "indeks panas"
     ]):
         id_konten = "heat_index"
 
-    elif any(kata in teks for kata in [
+    # 5. WBGT
+    elif any(k in teks for k in [
         "wbgt", "tekanan panas", "heat stress"
     ]):
         id_konten = "wbgt"
 
     else:
         return (
-            "Maaf, aku belum menemukan topik yang sesuai. "
-            "Coba tanyakan tentang WBGT, Heat Index, "
+            "Maaf, aku belum menemukan topik yang sesuai. 😊\n\n"
+            "Kamu bisa bertanya tentang WBGT, Heat Index, "
             "perbedaan keduanya, atau hasil analisis."
         )
 
+    # Ambil dokumen dari MongoDB
     data = ambil_konten(id_konten)
 
     if data is None:
-        return "Maaf, informasi tersebut belum tersedia di MongoDB."
+        return (
+            f"Maaf, dokumen '{id_konten}' belum ditemukan "
+            "di MongoDB."
+        )
 
-    # Susun jawaban dari dokumen MongoDB
+    # Susun jawaban
     jawaban = f"**{data['judul']}**\n\n{data['isi']}"
 
     if "poin" in data:
-        jawaban += "\n\n"
-        jawaban += "\n".join(
+        jawaban += "\n\n" + "\n".join(
             f"- {poin}" for poin in data["poin"]
         )
 
@@ -135,41 +150,55 @@ def jawab_chatbot(pertanyaan):
 
     return jawaban
 
+# ============================================================
+# TAMPILAN CHATBOT
 
 # ============================================================
 # TAMPILAN CHATBOT
 # ============================================================
 def render_chatbot():
     st.title("Chatbot")
+
     st.write(
-        "Halo! Aku siap membantu menjawab pertanyaan "
-        "seputar WBGT, Heat Index, dan hasil analisis."
+        "Tanyakan sesuatu tentang WBGT, Heat Index, "
+        "perbedaan keduanya, atau hasil analisis."
     )
 
-    # Menyimpan riwayat percakapan
+    # Sapaan awal diambil dari MongoDB
     if "riwayat_chat" not in st.session_state:
+        try:
+            data_sapaan = ambil_konten("sapaan_awal")
+
+            if data_sapaan:
+                pesan_awal = data_sapaan["isi"]
+            else:
+                pesan_awal = (
+                    "Hai! 👋 Ada yang ingin kamu tanyakan?"
+                )
+
+        except Exception:
+            pesan_awal = (
+                "Hai! 👋 Ada yang ingin kamu tanyakan?"
+            )
+
         st.session_state.riwayat_chat = [
             {
                 "role": "assistant",
-                "content": (
-                    "Halo! Ada yang ingin kamu tanyakan? "
-                    "Ketik pertanyaanmu di bawah, ya."
-                )
+                "content": pesan_awal
             }
         ]
 
-    # Menampilkan riwayat percakapan
+    # Tampilkan riwayat percakapan
     for pesan in st.session_state.riwayat_chat:
         with st.chat_message(pesan["role"]):
             st.markdown(pesan["content"])
 
-    # Kolom untuk mengetik pertanyaan
+    # Input pengguna
     pertanyaan = st.chat_input(
         "Ketik pertanyaanmu di sini..."
     )
 
     if pertanyaan:
-        # Tampilkan pertanyaan pengguna
         st.session_state.riwayat_chat.append({
             "role": "user",
             "content": pertanyaan
@@ -178,7 +207,6 @@ def render_chatbot():
         with st.chat_message("user"):
             st.markdown(pertanyaan)
 
-        # Buat dan tampilkan jawaban
         try:
             jawaban = jawab_chatbot(pertanyaan)
         except Exception as e:
@@ -194,12 +222,6 @@ def render_chatbot():
 
         with st.chat_message("assistant"):
             st.markdown(jawaban)
-
-st.set_page_config(
-    page_title="Dashboard Heat Index & WBGT",
-    page_icon="🌡️",
-    layout="wide",
-)
 
 # ---------------------------------------------------------------
 # DATA (hasil agregasi dari analisis)
