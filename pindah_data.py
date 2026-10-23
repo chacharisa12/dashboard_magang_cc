@@ -5,9 +5,9 @@ from pymongo.server_api import ServerApi
 print("Memulai pemindahan data...")
 
 # Koneksi ke MongoDB lokal
-local_client = MongoClient("mongodb://localhost:27017/")
+local_client = MongoClient("yy")
 
-atlas_uri = "mongodb+srv://charisamarthadps18_db_user:akusukakucing@cluster0.xnaoznz.mongodb.net/"
+atlas_uri = "yyy"
 
 atlas_client = MongoClient(
     atlas_uri,
